@@ -14,7 +14,7 @@ from ultralytics import YOLO
 # =========================
 # Ollama 設定
 # =========================
-OLLAMA_URL = "http://192.168.0.110:11434/api/chat"
+OLLAMA_URL = "http://localhost/api/chat"
 MODEL_NAME = "qwen3-vl:4B-instruct"
 # 每次 OCR 只用約 100～320 個 token（提示詞 + 一張 ROI；實測最大 317，為 512x512 的 ROI），2048 已足夠；
 # context 越小 KV cache 越小，Jetson 的 CPU/GPU 共用記憶體較不易吃緊。
