@@ -21,3 +21,4 @@ bus_image/
 *.avi
 *.mov
 *.mkv
+announce_sim_out/

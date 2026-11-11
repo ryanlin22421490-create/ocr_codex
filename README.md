@@ -31,6 +31,9 @@ The OCR pipeline enhances the sign crop and accepts route numbers containing one
 | `IMX519/nohead_onetime_main.py` | Headless live recognition with terminal controls and optional recording (confirmed after one result) |
 | `IMX519/ContinuousAutofocus_turbo.py` | Continuous autofocus used by the live scripts; can also run on its own |
 | `IMX519/yolo.py` | YOLO detection and camera, exposure, and focus control example |
+| `IMX519/announcer.py` | Voice announcement rules (when to announce, front / rear order, number reading); no audio output yet |
+| `IMX519/announce_sim.py` | Replays recorded videos through the headless pipeline and simulates the announcements |
+| `IMX519/test_announcer.py` | Unit tests for the announcement rules |
 | `gamma_dark.py` | Command-line LED sign image enhancement tool |
 | `ollama_api_test.py` | Sends one image to Ollama for a recognition test |
 | `IMX519/` | Camera, focuser, and autofocus support modules |
@@ -60,3 +63,16 @@ Install PyTorch and the camera dependencies using packages compatible with your 
    ```bash
    python3 IMX519/nohead_onetime_main.py --help
    ```
+
+## Announcement Simulation
+
+`IMX519/announce_sim.py` runs recorded videos through the same detection, filtering and one-shot OCR rules as `IMX519/nohead_onetime_main.py`, then decides the announcements with `IMX519/announcer.py`. It plays no sound: the sentences go to a log, a CSV and an SRT subtitle file aligned with the video.
+
+```bash
+python3 IMX519/announce_sim.py bus_image/bus_2.mp4 --ollama-url http://192.168.0.110:11434/api/chat
+python3 IMX519/announce_sim.py bus_image --save-video          # every video in the folder
+python3 IMX519/announce_sim.py bus_image/bus_2.mp4 --ocr track-id   # no Ollama: ordering and timing only
+python3 -m unittest IMX519/test_announcer.py
+```
+
+Results go to `announce_sim_out/<video name>/`. OCR answers are cached in `announce_sim_out/ocr_cache.json`, so rerunning with different `--announce-*` options does not query Ollama again. `order_frames.csv` and `order_disagree/` compare the bottom-edge order with the box-area order for every frame with two or more buses.
