@@ -22,3 +22,6 @@ bus_image/
 *.mov
 *.mkv
 announce_sim_out/
+
+# Piper voice models are downloaded locally, not kept in Git.
+IMX519/voice/

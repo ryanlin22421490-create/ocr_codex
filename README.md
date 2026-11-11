@@ -31,7 +31,8 @@ The OCR pipeline enhances the sign crop and accepts route numbers containing one
 | `IMX519/nohead_onetime_main.py` | Headless live recognition with terminal controls and optional recording (confirmed after one result) |
 | `IMX519/ContinuousAutofocus_turbo.py` | Continuous autofocus used by the live scripts; can also run on its own |
 | `IMX519/yolo.py` | YOLO detection and camera, exposure, and focus control example |
-| `IMX519/announcer.py` | Voice announcement rules (when to announce, front / rear order, number reading); no audio output yet |
+| `IMX519/nohead_voice_main.py` | `nohead_onetime_main.py` plus voice: speaks each route number as soon as it is confirmed (Piper or espeak-ng, played with aplay) |
+| `IMX519/announcer.py` | Voice announcement rules (when to announce, front / rear order, number reading), shared by the voice program and the simulator |
 | `IMX519/announce_sim.py` | Replays recorded videos through the headless pipeline and simulates the announcements |
 | `IMX519/test_announcer.py` | Unit tests for the announcement rules |
 | `gamma_dark.py` | Command-line LED sign image enhancement tool |
@@ -76,3 +77,17 @@ python3 -m unittest IMX519/test_announcer.py
 ```
 
 Results go to `announce_sim_out/<video name>/`. OCR answers are cached in `announce_sim_out/ocr_cache.json`, so rerunning with different `--announce-*` options does not query Ollama again. `order_frames.csv` and `order_disagree/` compare the bottom-edge order with the box-area order for every frame with two or more buses.
+
+## Voice Announcements
+
+`IMX519/nohead_voice_main.py` takes every `nohead_onetime_main.py` option and key, and speaks each route number the moment it is confirmed.
+
+```bash
+pip3 install piper-tts
+python3 -m piper.download_voices zh_CN-huayan-medium --data-dir IMX519/voice
+sudo apt install alsa-utils espeak-ng        # aplay for playback; espeak-ng as the fallback voice
+
+python3 IMX519/nohead_voice_main.py --voice-test 307,262     # speaker test, no camera
+python3 IMX519/nohead_voice_main.py --voice-prepare 307,262  # synthesize these routes in advance
+python3 IMX519/nohead_voice_main.py --audio-device plughw:1,0
+```
