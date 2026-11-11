@@ -29,6 +29,8 @@ The OCR pipeline enhances the sign crop and accepts route numbers containing one
 | `main_video_test.py` | Detects and recognizes bus numbers in a video file (confirmed after two identical results) |
 | `IMX519/main.py` | Live Jetson IMX519 recognition with a display window (confirmed after one result) |
 | `IMX519/nohead_onetime_main.py` | Headless live recognition with terminal controls and optional recording (confirmed after one result) |
+| `IMX519/nohead_onetime_tts_main.py` | `nohead_onetime_main.py` plus voice announcement of each confirmed bus number |
+| `IMX519/announcer.py` | Offline voice announcement (espeak-ng) used by `nohead_onetime_tts_main.py`; run it alone to test the sound |
 | `IMX519/ContinuousAutofocus_turbo.py` | Continuous autofocus used by the live scripts; can also run on its own |
 | `IMX519/yolo.py` | YOLO detection and camera, exposure, and focus control example |
 | `gamma_dark.py` | Command-line LED sign image enhancement tool |
@@ -60,3 +62,24 @@ Install PyTorch and the camera dependencies using packages compatible with your 
    ```bash
    python3 IMX519/nohead_onetime_main.py --help
    ```
+
+## Voice Announcement
+
+`IMX519/nohead_onetime_tts_main.py` announces each confirmed bus number once, offline, through espeak-ng, for example "三零七號公車進站" (digits are read one by one).
+
+- Buses confirmed within 0.5 s share one sentence, two numbers at most; the bus with the taller box (the nearer one) is read first.
+- A bus is announced as "後方...號" when another bus in the frame has a box at least 1.2 times as tall (5-frame average). The ratio depends on the camera position.
+- The same number is not repeated within 30 s, unless the bus announced earlier is still in the frame (two buses on the same route).
+- A bus that has left the frame before its turn is not announced.
+
+Setup on the Jetson:
+
+```bash
+sudo apt install espeak-ng pulseaudio-utils
+python3 IMX519/announcer.py 307        # sound test
+python3 IMX519/nohead_onetime_tts_main.py
+```
+
+Sound is played with `paplay` (PulseAudio, which carries a Bluetooth headset), or `aplay` when `paplay` is missing; `--tts-player "aplay -D plughw:1,0"` selects another command. Connect the headset and make it the default PulseAudio output before starting. Over SSH, PulseAudio must be running for the logged-in user.
+
+espeak-ng 1.51 mispronounces Chinese characters; the announcer detects this at startup and sends pinyin to the `cmn-latn-pinyin` voice instead.
