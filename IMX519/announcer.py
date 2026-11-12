@@ -53,7 +53,9 @@ PLAY_TIMEOUT = 20.0
 MERGE_WINDOW = 0.5            # 第一個號碼確認後，等多久收其他號碼合併成一句
 MAX_PER_SENTENCE = 2
 COOLDOWN_SECONDS = 30.0       # 同一號碼多久內不重播
-VISIBLE_SECONDS = 1.0         # 多久內有偵測到算「還在畫面上」（17 FPS 約 15 幀）
+VISIBLE_SECONDS = 2.5         # 多久內有偵測到算「還在畫面上」；要大於 OCR + 合併等待（約 1.2 s），
+                              # 否則確認後 YOLO 漏偵測一下就會被當成開走
+FRONT_SECONDS = 1.0           # 判斷「後方」時，別台車要多久內有偵測到才算還在前面
 CONCURRENT_SECONDS = 0.5      # 上次播同號碼的那台車，多久內有偵測到算「和新車同時在畫面上」
 REAR_HEIGHT_RATIO = 1.2       # 別台車的框高 >= 自己的幾倍，自己算後車；換架設位置要重新量
 HEIGHT_FRAMES = 5             # 框高取最近幾幀平均
@@ -272,7 +274,9 @@ class Announcer:
                             f"{now - last[0]:.0f} s ago (ID:{previous_id})")
                         continue
                 rear = any(height >= REAR_HEIGHT_RATIO * scene[track_id]
-                           for other_id, height in scene.items() if other_id != track_id)
+                           for other_id, height in scene.items()
+                           if other_id != track_id
+                           and now - self._seen[other_id] <= FRONT_SECONDS)
                 self._last_spoken[number] = (now, track_id)
                 items.append((number, rear))
             pending[:] = leftover
