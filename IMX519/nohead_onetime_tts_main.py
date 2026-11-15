@@ -76,7 +76,7 @@ if IMX519_DIR.exists():
 from JetsonCamera import Camera
 from Focuser import Focuser
 import daynight
-from announcer import Announcer, STARTUP_TEXT
+from announcer import Announcer, SpeechTrack, STARTUP_TEXT
 from ContinuousAutofocus_turbo import (FocusController, RoiMeter,
                                        add_af_arguments, check_af_args)
 
@@ -902,6 +902,9 @@ class VideoRecorder:
     each frame is held or dropped by its capture time: the video plays back in
     real time. A full queue (encoder too slow) drops frames rather than slowing
     recognition down.
+
+    OpenCV writes no audio: the announcements played while recording are kept in
+    self.speech and merged into the finished file by close() (ffmpeg, video copied).
     """
 
     def __init__(self, path, fps, size):
@@ -910,6 +913,10 @@ class VideoRecorder:
         self.writer, self.backend = open_video_writer(self.path, fps, size)
         self.queue = Queue(maxsize=RECORD_QUEUE_SIZE)
         self.start_time = None
+        # (frame timestamp, start_time) each time start_time is set or moved by a stall
+        self.epochs = []
+        self.speech = SpeechTrack()
+        self.audio_note = ""
         self.last_image = None
         self.written = 0
         self.dropped = 0
@@ -935,10 +942,12 @@ class VideoRecorder:
             image, timestamp = item
             if self.start_time is None:
                 self.start_time = timestamp
+                self.epochs.append((timestamp, self.start_time))
             slot = int((timestamp - self.start_time) * self.fps)
             if slot - self.written > max_hold:
                 # Long stall: keep only RECORD_MAX_STALL seconds of it.
                 self.start_time += (slot - self.written - max_hold) / self.fps
+                self.epochs.append((timestamp, self.start_time))
                 slot = self.written + max_hold
             # Hold the previous frame until this one's time, then show this one.
             while self.written < slot:
@@ -949,11 +958,23 @@ class VideoRecorder:
                 self.written += 1
             self.last_image = image
 
+    def video_time(self, timestamp):
+        """Position in the video (seconds) of a time.monotonic() moment."""
+        if not self.epochs:
+            return 0.0
+        start_time = self.epochs[0][1]
+        for since, start in self.epochs:
+            if since <= timestamp:
+                start_time = start
+        return timestamp - start_time
+
     def close(self):
         """Encode what is queued and finalise the file (an MP4 is unreadable without it)."""
         self.queue.put(None)
         self.thread.join()
         self.writer.release()
+        # The video is complete and playable now; adding the audio track comes after.
+        self.audio_note = self.speech.merge_into(self.path, self.seconds, self.video_time)
 
 
 def handle_camera_key(key, camera, cam_state, focuser, af):
@@ -1079,6 +1100,7 @@ def main():
             record_fps = args.record_fps or min(args.framerate, RECORD_DEFAULT_MAX_FPS)
             recorder = VideoRecorder(record_path, record_fps, (args.width, args.height))
             print(f"Recording {recorder.path} ({recorder.backend}, {record_fps:g} FPS)")
+            announcer.track = recorder.speech   # 播報的聲音錄進影片
 
         while True:
             try:
@@ -1192,6 +1214,8 @@ def main():
         if recorder is not None:
             print(f"Saved video: {recorder.path} ({recorder.seconds:.1f} s, "
                   f"{recorder.dropped} frames dropped)")
+            if recorder.audio_note:
+                print(f"Audio: {recorder.audio_note}")
 
 
 if __name__ == "__main__":

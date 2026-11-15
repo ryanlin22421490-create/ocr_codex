@@ -27,10 +27,15 @@ espeak-ng 1.51 把中文字念成英文（「三」念成 "san one"）；1.50 �
 啟動時先試念一個字，不正常就改送拼音給 cmn-latn-pinyin 語音（PINYIN 表），發音相同。
 要念新的字時記得把拼音補進 PINYIN。
 
+錄影（--record）：OpenCV 寫出的 MP4 沒有聲音。SpeechTrack 記下每一句的 WAV 與開始播放
+的時間，錄影結束時排成一條和影片等長的音軌，用 ffmpeg 併進 MP4（影像不重新編碼）。
+沒有 ffmpeg 時音軌另存成 <影片檔名>_tts.wav。安裝：sudo apt install ffmpeg
+
 單獨執行可以測試喇叭 / 耳機：
     python3 announcer.py 307          # 「三零七號公車進站」
     python3 announcer.py 307 12       # 「三零七號，一二號公車進站」
 """
+import os
 import shlex
 import shutil
 import subprocess
@@ -61,6 +66,7 @@ REAR_HEIGHT_RATIO = 1.2       # 別台車的框高 >= 自己的幾倍，自己�
 HEIGHT_FRAMES = 5             # 框高取最近幾幀平均
 FORGET_SECONDS = 60.0         # 這麼久沒出現的 ID 清掉（ByteTrack 不會重用 ID）
 QUEUE_SIZE = 8
+MUX_TIMEOUT = 300.0           # ffmpeg 併音軌的時間上限（影像只複製，通常幾秒內）
 
 DIGITS = "零一二三四五六七八九"
 STARTUP_TEXT = "語音播報已啟動"
@@ -128,6 +134,82 @@ def log(message: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {message}")
 
 
+class SpeechTrack:
+    """播過的語音，錄影結束時併進 MP4 當音軌。add() 由播報執行緒呼叫，merge_into() 由錄影收尾呼叫。"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._params = None
+        self._clips = []          # (開始播放的時間 time.monotonic(), PCM bytes)
+
+    def add(self, wav_path, start: float) -> None:
+        with wave.open(str(wav_path), "rb") as source:
+            params = source.getparams()
+            frames = source.readframes(source.getnframes())
+        key = (params.nchannels, params.sampwidth, params.framerate)
+        with self._lock:
+            if self._params is None:
+                self._params = key
+            if key == self._params:      # espeak-ng 每句格式相同；不同就不收，避免音軌錯亂
+                self._clips.append((start, frames))
+
+    def write(self, path, duration: float, video_time) -> int:
+        """寫出長度 duration 秒的 WAV；video_time(t) 把播放時間換成影片時間。回傳放進去的句數。"""
+        with self._lock:
+            params, clips = self._params, list(self._clips)
+        if params is None:
+            return 0
+        channels, sample_width, rate = params
+        frame_bytes = channels * sample_width
+        track = bytearray(int(duration * rate) * frame_bytes)
+        count = 0
+        for start, frames in clips:
+            offset = int(video_time(start) * rate) * frame_bytes
+            if offset < 0:               # 錄影開始前就在播：只留錄影開始後的部分
+                frames, offset = frames[-offset:], 0
+            frames = frames[:max(0, len(track) - offset)]
+            if frames:
+                track[offset:offset + len(frames)] = frames
+                count += 1
+        if count:
+            with wave.open(str(path), "wb") as target:
+                target.setnchannels(channels)
+                target.setsampwidth(sample_width)
+                target.setframerate(rate)
+                target.writeframes(bytes(track))
+        return count
+
+    def merge_into(self, video_path, duration: float, video_time) -> str:
+        """把語音併進 video_path（原地取代）；回傳一行結果說明，沒有語音時回傳空字串。"""
+        video_path = Path(video_path)
+        wav_path = video_path.with_name(video_path.stem + "_tts.wav")
+        try:
+            count = self.write(wav_path, duration, video_time)
+        except (OSError, wave.Error) as error:
+            return f"announcement audio not saved: {error}"
+        if not count:
+            return ""
+        if shutil.which("ffmpeg") is None:
+            return (f"no ffmpeg, announcement audio saved separately: {wav_path} "
+                    "(sudo apt install ffmpeg to get it inside the MP4)")
+        merged = video_path.with_name(video_path.stem + "_merging.mp4")
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path), "-i", str(wav_path),
+                 "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", str(merged)],
+                capture_output=True, text=True, timeout=MUX_TIMEOUT,
+            )
+            if result.returncode:
+                raise OSError(result.stderr.strip().splitlines()[-1] if result.stderr.strip()
+                              else f"ffmpeg exit code {result.returncode}")
+            os.replace(merged, video_path)
+        except (OSError, subprocess.SubprocessError) as error:
+            merged.unlink(missing_ok=True)
+            return f"ffmpeg failed ({error}); announcement audio saved separately: {wav_path}"
+        wav_path.unlink(missing_ok=True)
+        return f"with {count} announcement(s) as audio"
+
+
 class Announcer:
     def __init__(self, player: str | None = None, speak=None, clock=time.monotonic):
         """speak / clock 可換掉（測試用）；speak(text) 預設用 espeak-ng 合成並播放。"""
@@ -143,6 +225,7 @@ class Announcer:
         self._tmpdir = None
         self._wav = None
         self._pinyin = False
+        self.track = None         # SpeechTrack；錄影時由主程式設定，每句播放時記下來
 
         self._speak = speak
         if speak is None:
@@ -312,6 +395,9 @@ class Announcer:
         add_lead_silence(self._wav, LEAD_SILENCE)
         if self._stop.is_set():
             return
+        track = self.track
+        if track is not None:
+            track.add(self._wav, time.monotonic())
         self._process = subprocess.Popen(self._player + [str(self._wav)],
                                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:

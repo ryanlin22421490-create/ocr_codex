@@ -82,4 +82,6 @@ python3 IMX519/nohead_onetime_tts_main.py
 
 Sound is played with `paplay` (PulseAudio, which carries a Bluetooth headset), or `aplay` when `paplay` is missing; `--tts-player "aplay -D plughw:1,0"` selects another command. Connect the headset and make it the default PulseAudio output before starting. Over SSH, PulseAudio must be running for the logged-in user.
 
+With `--record`, the announcements played during the recording are added to the MP4 as its audio track when the program exits. This needs the `ffmpeg` command (`sudo apt install ffmpeg`); without it the audio is saved next to the video as `<name>_tts.wav`.
+
 espeak-ng 1.51 mispronounces Chinese characters; the announcer detects this at startup and sends pinyin to the `cmn-latn-pinyin` voice instead.
