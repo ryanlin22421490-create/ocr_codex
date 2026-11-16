@@ -30,6 +30,7 @@ The OCR pipeline enhances the sign crop and accepts route numbers containing one
 | `IMX519/main.py` | Live Jetson IMX519 recognition with a display window (confirmed after one result) |
 | `IMX519/nohead_onetime_main.py` | Headless live recognition with terminal controls and optional recording (confirmed after one result) |
 | `IMX519/nohead_onetime_tts_main.py` | `nohead_onetime_main.py` plus voice announcement of each confirmed bus number |
+| `IMX519/nohead_onetime_tts_day_main.py` | `nohead_onetime_tts_main.py` for strong daylight: 11.1 ms day exposure, too-bright warning, clipped-pixel share in the status lines, default focus position while the AF ROI is clipped |
 | `IMX519/announcer.py` | Offline voice announcement (espeak-ng) used by `nohead_onetime_tts_main.py`; run it alone to test the sound |
 | `IMX519/ContinuousAutofocus_turbo.py` | Continuous autofocus used by the live scripts; can also run on its own |
 | `IMX519/yolo.py` | YOLO detection and camera, exposure, and focus control example |
