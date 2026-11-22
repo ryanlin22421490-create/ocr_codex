@@ -116,7 +116,7 @@ Measurement = namedtuple("Measurement", "sharpness brightness motion valid speed
 
 
 class RoiMeter:
-    """Per-frame AF inputs from the central ROI: sharpness, brightness, motion, exposure.
+    """Per-frame AF inputs from the central ROI: sharpness, brightness, motion, exposure (mean brightness only).
 
     Keeps the previous frame for optical flow; reset() after the camera is reopened.
     """
@@ -150,7 +150,8 @@ class RoiMeter:
         difference = 0 if previous is None else float(np.mean(cv2.absdiff(previous, gray)))
         motion = speed > self.args.motion_threshold if flow_known else difference > 10
         self.previous, self.previous_time = gray, now
-        valid = 10 < brightness < 245 and float(np.mean(gray >= 250)) < 0.3
+        # 只看 ROI 平均亮度；不再用死白像素比例擋對焦（白天過曝場景會整段停在 HOLD）
+        valid = 10 < brightness < 245
         return Measurement(sharpness, brightness, motion, valid, speed, flow_known, roi)
 
 

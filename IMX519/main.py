@@ -509,10 +509,11 @@ def parse_args():
                         help="Camera output height. Default: 2160")
     parser.add_argument("--framerate", type=int, choices=FPS_OPTIONS, default=17,
                         help="IMX519 FPS. Supported: 9, 15, 17, 60, 120")
-    parser.add_argument("--flip", type=int, choices=range(8), default=0, metavar="0-7",
+    # 鏡頭倒裝，實際執行一律用 2（旋轉 180 度）
+    parser.add_argument("--flip", type=int, choices=range(8), default=2, metavar="0-7",
                         help="Rotate / mirror the camera image in hardware (nvvidconv flip-method): "
                              "0 none, 2 rotate 180 (camera mounted upside down), "
-                             "4 mirror left-right, 6 mirror top-bottom. Default: 0")
+                             "4 mirror left-right, 6 mirror top-bottom. Default: 2")
     parser.add_argument("--exposure", type=float, default=None,
                         help="Fixed exposure time in ms; default is auto exposure "
                              f"({daynight.REFERENCE_EXPOSURE_MS:g} ms with day / night detection)")
@@ -540,7 +541,7 @@ def parse_args():
     add_af_arguments(parser)
     # 對焦 ROI 預設為畫面 20%，從中央往左 0.1、往上 0.1（中心在 (0.4, 0.4)，1280x720 為 x 384～640、y 216～360）；
     # 共用模組 ContinuousAutofocus_turbo 的預設（中央 30%）不變
-    parser.set_defaults(roi_size=0.2, roi_x=-0.1, roi_y=-0.1)
+    parser.set_defaults(roi_size=0.2, roi_x=0.0, roi_y=0.0)
     args = parser.parse_args()
     check_af_args(parser, args)
     if not 0 < args.conf < 1:

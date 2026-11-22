@@ -19,6 +19,20 @@ night profile (gain 3, conf 0.3); afterwards nothing is re-checked, so restart
 the program across dusk / dawn. --no-auto-daynight restores the manual
 --gain / --conf behaviour; a manual exposure / FPS key during the 10 s cancels it.
 
+Voice (voice.py): each CONFIRMED bus is announced in Mandarin through the
+default PulseAudio output by piper running in the background, so recognition
+never waits for speech. Buses confirmed within --voice-merge s (0.8) are
+announced together, front bus first, one sentence each ("前車12號公車即將進站",
+then "後車5號公車即將進站"; the front bus is the one further right,
+--voice-front); a bus that has left by then is skipped. Each track ID is
+announced once; the same number again is a second bus (announced the same way)
+while the earlier one is still in view elsewhere, or an ID switch (not
+announced) when it appears near where the earlier one was within
+--voice-switch-window s (5). Numbers with 3 or 4 digits are read digit
+by digit; --voice-speed 1.25 is 25% slower than piper's normal speed.
+Sentences never interrupt each other; [VOICE] log lines mark each one. Any voice
+failure only prints a warning. --no-voice turns it off.
+
 Meant for running over SSH: results and status lines go to the terminal, and the
 camera controls are single key presses read from that terminal (no Enter needed).
 Press C to save an annotated snapshot when you need to see the picture, or run
@@ -64,6 +78,7 @@ if IMX519_DIR.exists():
 from JetsonCamera import Camera
 from Focuser import Focuser
 import daynight
+import voice
 from ContinuousAutofocus_turbo import (FocusController, RoiMeter,
                                        add_af_arguments, check_af_args)
 
@@ -138,10 +153,17 @@ ASPECT_RATIO_MAX = 1.8
 # =========================
 confirmed_buses = {}
 last_seen_frame = {}
+# 語音排隊播報用（voice.py 透過 get_tracks 讀取）：最後 / 第一次出現的框（處理畫面座標）與 monotonic 時間
+last_box = {}
+last_seen_time = {}
+first_box = {}
+first_seen_time = {}
+latest_frame_id = 0
 last_ocr_time = {}
 ocr_pending_ids = set()
 ocr_queue = Queue(maxsize=OCR_QUEUE_SIZE)
 lock = threading.Lock()
+announcer = None  # voice.VoiceAnnouncer；main() 建立，OCR worker 確認號碼後呼叫 announce()
 ollama_session = requests.Session()
 ollama_session.trust_env = False
 
@@ -382,6 +404,9 @@ def process_ocr(track_id: int, roi_img: np.ndarray):
     with lock:
         confirmed_buses[track_id] = result
     print(f"[{time.strftime('%H:%M:%S')}] CONFIRMED [ID:{track_id}] {result}")
+    # 只在 CONFIRMED 播報：主迴圈的 bus_text 會出現 NONE、"5,12"，車被擋住時還會反覆跳動
+    if announcer is not None:
+        announcer.announce(track_id, result)
 
 
 def ocr_worker():
@@ -456,6 +481,23 @@ def get_visible_results(frame_id: int) -> list[str]:
         return [confirmed_buses[track_id] for track_id in sorted(visible_ids)]
 
 
+def get_tracks() -> dict:
+    """給 voice.VoiceAnnouncer：{track_id: voice.Track(是否在畫面中, 最後的框, 最後被看到幾秒前,
+    第一次出現的框, 第一次出現幾秒前)}。
+
+    「在畫面中」與 get_visible_results 相同：最近 GRACE_FRAMES 幀內出現過（相機重開、沒有新幀時維持原狀）。
+    消失秒數用 time.monotonic() 記錄，不用幀數換算：FPS 會隨 YOLO 負載變動。
+    """
+    now = time.monotonic()
+    with lock:
+        return {
+            track_id: voice.Track(latest_frame_id - last_seen_frame[track_id] <= GRACE_FRAMES,
+                                  box, now - last_seen_time[track_id],
+                                  first_box[track_id], now - first_seen_time[track_id])
+            for track_id, box in last_box.items()
+        }
+
+
 def forget_stale_tracks(frame_id: int) -> None:
     """清除超過 FORGET_FRAMES 沒出現的 ID，讓共用字典不會隨執行時間無限增長。
 
@@ -472,6 +514,10 @@ def forget_stale_tracks(frame_id: int) -> None:
             del last_seen_frame[track_id]
             confirmed_buses.pop(track_id, None)
             last_ocr_time.pop(track_id, None)
+            last_box.pop(track_id, None)
+            last_seen_time.pop(track_id, None)
+            first_box.pop(track_id, None)
+            first_seen_time.pop(track_id, None)
     if stale:
         print(f"Forgot {len(stale)} stale track(s): {stale}")
 
@@ -536,10 +582,11 @@ def parse_args():
                         help="Camera output height. Default: 2160")
     parser.add_argument("--framerate", type=int, choices=FPS_OPTIONS, default=17,
                         help="IMX519 FPS. Supported: 9, 15, 17, 60, 120")
-    parser.add_argument("--flip", type=int, choices=range(8), default=0, metavar="0-7",
+    # 鏡頭倒裝，實際執行一律用 2（旋轉 180 度）
+    parser.add_argument("--flip", type=int, choices=range(8), default=2, metavar="0-7",
                         help="Rotate / mirror the camera image in hardware (nvvidconv flip-method): "
                              "0 none, 2 rotate 180 (camera mounted upside down), "
-                             "4 mirror left-right, 6 mirror top-bottom. Default: 0")
+                             "4 mirror left-right, 6 mirror top-bottom. Default: 2")
     parser.add_argument("--exposure", type=float, default=None,
                         help="Fixed exposure time in ms; default is auto exposure "
                              f"({daynight.REFERENCE_EXPOSURE_MS:g} ms with day / night detection)")
@@ -547,6 +594,7 @@ def parse_args():
                         help='Fixed gain range, e.g. "1 1"; use "" for auto gain. '
                              "Only used with --no-auto-daynight")
     daynight.add_arguments(parser)
+    voice.add_arguments(parser)
     parser.add_argument("-i", "--i2c-bus", type=int, default=10,
                         help="Focuser I2C bus. Default: 10")
     parser.add_argument("--model", default=None,
@@ -568,15 +616,19 @@ def parse_args():
     parser.add_argument("--record-fps", type=float, default=None,
                         help="MP4 frame rate; default: camera FPS, at most "
                              f"{RECORD_DEFAULT_MAX_FPS}")
+    parser.add_argument("--no-overlay", action="store_true",
+                        help="Snapshots / MP4 without text or the AF box "
+                             "(bus and sign boxes are still drawn)")
     add_af_arguments(parser)
     # 對焦 ROI 預設為畫面 20%，從中央往左 0.1、往上 0.1（中心在 (0.4, 0.4)，1280x720 為 x 384～640、y 216～360）；
     # 共用模組 ContinuousAutofocus_turbo 的預設（中央 30%）不變
-    parser.set_defaults(roi_size=0.2, roi_x=-0.1, roi_y=-0.1)
+    parser.set_defaults(roi_size=0.2, roi_x=0.0, roi_y=0.0)
     args = parser.parse_args()
     check_af_args(parser, args)
     if not 0 < args.conf < 1:
         parser.error("--conf must be between 0 and 1")
     daynight.check_args(args)
+    voice.check_args(args)
     if args.status_interval < 0:
         parser.error("--status-interval must be >= 0")
     if args.record_fps is not None and args.record_fps <= 0:
@@ -819,14 +871,21 @@ def print_status(annotations, cam_state, af):
           f"Mode: {cam_state['mode']} | AF: {af_text}")
 
 
-def render_display(frame, annotations, bus_text, cam_state, focuser, af):
-    """Draw what main.py shows in its window onto a copy of the clean frame."""
+def render_display(frame, annotations, bus_text, cam_state, focuser, af, overlay=True):
+    """Draw what main.py shows in its window onto a copy of the clean frame.
+
+    overlay=False (--no-overlay) keeps only the bus and sign boxes: no labels,
+    status text or AF box.
+    """
     display = frame.copy()
     for (x1, y1, x2, y2), (rx1, ry1, rx2, ry2), label, color in annotations:
         cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.rectangle(display, (rx1, ry1), (rx2, ry2), (0, 0, 255), 2)
-        cv2.putText(display, label, (x1, max(25, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        if overlay:
+            cv2.putText(display, label, (x1, max(25, y1 - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+    if not overlay:
+        return display
 
     color = (0, 165, 255) if bus_text == "NONE" else (255, 0, 0)
     cv2.putText(
@@ -980,7 +1039,7 @@ def handle_camera_key(key, camera, cam_state, focuser, af):
 
 
 def main():
-    global model, half, device
+    global model, half, device, announcer, latest_frame_id
 
     # Line buffered, so `| tee run.log` or `> run.log` + `tail -f` shows output at once.
     sys.stdout.reconfigure(line_buffering=True)
@@ -1039,6 +1098,8 @@ def main():
     half = inference_device == "cuda"
 
     warmup_ollama()
+    # 在 OCR worker 啟動前建立，第一個 CONFIRMED 就能播報；piper 在背景載入模型（約 0.4 s）
+    announcer = voice.VoiceAnnouncer(args, get_tracks)
     threading.Thread(target=ocr_worker, daemon=True, name="ollama-ocr-worker").start()
 
     frame_id = 0
@@ -1079,11 +1140,16 @@ def main():
             # 開機日夜判斷：量乾淨的處理畫面（畫框、文字之前），收滿 10 秒才套用結果
             daynight.startup_step(cam_state, frame, frame_time, reopen_for_profile)
             buses = detect_bus(frame, cam_state["conf"])
-            current_ids = {bus[5] for bus in buses}
 
             with lock:
-                for track_id in current_ids:
+                latest_frame_id = frame_id
+                for x1, y1, x2, y2, _, track_id in buses:
                     last_seen_frame[track_id] = frame_id
+                    last_seen_time[track_id] = frame_time
+                    last_box[track_id] = (x1, y1, x2, y2)
+                    if track_id not in first_box:
+                        first_box[track_id] = last_box[track_id]
+                        first_seen_time[track_id] = frame_time
             if frame_id % CLEANUP_INTERVAL_FRAMES == 0:
                 forget_stale_tracks(frame_id)
 
@@ -1132,8 +1198,8 @@ def main():
                 print(f"[{time.strftime('%H:%M:%S')}] BUS NUMBER: {bus_text}")
 
             if recorder is not None:
-                recorder.add(render_display(frame, annotations, bus_text,
-                                            cam_state, focuser, af), frame_time)
+                recorder.add(render_display(frame, annotations, bus_text, cam_state,
+                                            focuser, af, not args.no_overlay), frame_time)
 
             now = time.monotonic()
             if args.status_interval and now - status_time >= args.status_interval:
@@ -1148,8 +1214,8 @@ def main():
                 elif key in ("p", "P", " "):
                     print_status(annotations, cam_state, af)
                 elif key in ("c", "C"):
-                    save_snapshot(render_display(frame, annotations, bus_text,
-                                                 cam_state, focuser, af))
+                    save_snapshot(render_display(frame, annotations, bus_text, cam_state,
+                                                 focuser, af, not args.no_overlay))
                 else:
                     if key in REOPEN_KEYS:
                         # 手動改曝光 / FPS 會讓量到的亮度失準：以使用者的設定為準，維持白天參數
@@ -1162,6 +1228,8 @@ def main():
         # Finalise the MP4 first: printing can fail once an SSH terminal is gone.
         if recorder is not None:
             recorder.close()
+        # 中斷正在播的句子並結束 piper，不等佇列播完
+        announcer.close()
         camera.close()
         keys.restore()
         if recorder is not None:

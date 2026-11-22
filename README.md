@@ -29,8 +29,8 @@ The OCR pipeline enhances the sign crop and accepts route numbers containing one
 | `main_video_test.py` | Detects and recognizes bus numbers in a video file (confirmed after two identical results) |
 | `IMX519/main.py` | Live Jetson IMX519 recognition with a display window (confirmed after one result) |
 | `IMX519/nohead_onetime_main.py` | Headless live recognition with terminal controls and optional recording (confirmed after one result) |
+| `IMX519/voice.py` | Mandarin voice announcement of confirmed buses (piper), used by the headless script; `--simulate` checks the queuing rules |
 | `IMX519/ContinuousAutofocus_turbo.py` | Continuous autofocus used by the live scripts; can also run on its own |
-| `IMX519/yolo.py` | YOLO detection and camera, exposure, and focus control example |
 | `gamma_dark.py` | Command-line LED sign image enhancement tool |
 | `ollama_api_test.py` | Sends one image to Ollama for a recognition test |
 | `IMX519/` | Camera, focuser, and autofocus support modules |
